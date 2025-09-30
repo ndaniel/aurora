@@ -2,7 +2,7 @@
 
 [![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-ff4b4b.svg)](https://streamlit.io/)
 
-AURORA (compounds in Nordic plants) - a Streamlit app, that integrates several plants
+[AURORA](aurorapilot.streamlit.app) (compounds in Nordic plants) is a Streamlit app, that integrates several plants
 databases like:
 - [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database)
 - [Laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility), and
