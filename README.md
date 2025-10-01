@@ -34,6 +34,15 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Docker
+
+You can also run the app inside Docker:
+
+```bash
+docker build -t aurora-app .
+docker run -it --rm -p 8501:8501 aurora-app
+```
+
 ## Data Sources & Attribution
 
 - [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database) - CC0 license
