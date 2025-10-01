@@ -1,5 +1,8 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+
 jobs:
   install-and-smoke:
     runs-on: ubuntu-latest
@@ -9,10 +12,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: python - << 'PY'
-import importlib, sys
-for m in ["pandas","numpy","streamlit","openpyxl"]:
-    importlib.import_module(m)
-print("Deps OK")
-PY
+      - name: Import smoke test
+        run: >
+          python -c "import importlib;
+          [importlib.import_module(m) for m in ['pandas','numpy','streamlit','openpyxl']];
+          print('Deps OK')"
 
