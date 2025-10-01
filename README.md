@@ -2,6 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.49-brightgreen)
+![CI](https://github.com/ndaniel/aurora/actions/workflows/ci.yml/badge.svg)
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-lightgrey)
 
 
@@ -50,4 +51,12 @@ docker run -it --rm -p 8501:8501 aurora-app
 - [GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility) - CC0/CC-BY/CC-BY-NC licenses (depending on the dataset)
 
 All rights and data terms respected according to source guidelines.
+
+⚠️ Note: Processed data files are expected under `data/`. Some data 
+sources (Laji.fi, COCONUT) may require manual export. ETL scripts will 
+be added in a future update.
+
+
+
+
 
