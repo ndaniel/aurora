@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+.env
+
+# Streamlit & cache
+.streamlit/
+.cache/
+
+# Git & CI
+.git
+.gitignore
+.github/
+
+# OS files
+.DS_Store
+*~
+
+# Data (keep code light, exclude raw/processed)
+data/*
+!data/sample.csv   # keep a tiny sample for demo
+
