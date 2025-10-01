@@ -14,6 +14,13 @@ from typing import Tuple
 import pandas as pd
 import streamlit as st
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+log = logging.getLogger("aurora")
+log.info("App started")
+
+
 DEFAULT_COMPOUND = "arctigenin"
 
 DATA_DIR = "data"
@@ -105,14 +112,31 @@ def is_smiles(smiles_string: str) -> bool:
     return True
 
 ########################################################################################
-@st.cache_data
+@st.cache_data(show_spinner=True, ttl=3600)
 def load_data():
-    print("Processing short plant list of plants genera...")
+
+    required = {
+        "COCONUT_DB_PATH": COCONUT_DB_PATH,
+        "LAJI_DB_PATH": LAJI_DB_PATH,
+        "GBIF_DB_PATH": GBIF_DB_PATH,
+        "LIST_PLANTS_GENERA_PATH": LIST_PLANTS_GENERA_PATH,
+    }
+    missing = []
+    for label, p in required.items():
+        if not os.path.exists(p) or os.path.getsize(p) == 0:
+            missing.append(f"{label} → {p}")
+
+    if missing:
+        st.error("Required data files are missing or empty:\n- " + "\n- ".join(missing))
+        st.stop()
+
+    log.info("Processing short plant list of plants genera...")
+
     plants_genera = set()
     with open(LIST_PLANTS_GENERA_PATH, "r") as f:
         plants_genera = set([e.lower().rstrip("\r\n") for e in f if e.rstrip("\r\n")])
 
-    print("Processing Laji.fi database information...")
+    log.info("Processing Laji.fi database information...")
     laji = pd.read_csv(LAJI_DB_PATH, sep="\t", low_memory=False)
     laji["name"] = laji["Scientific name"].str.lower()
     laji = laji[["name", "Identifier", "Observation count from Finland", "Genus, Scientific name"]].copy()
@@ -120,7 +144,7 @@ def load_data():
     laji["genus_laji"] = laji["genus_laji"].str.lower()
     laji = laji.dropna(subset=["name"]).drop_duplicates()
 
-    print("Processing GBIF database information...")
+    log.info("Processing GBIF database information...")
     gbif = pd.read_csv(GBIF_DB_PATH, sep="\t", low_memory=False)
     gbif = gbif[
         ["canonicalName", "genus", "obs_FI", "obs_NO", "count_FI_60N", "count_NO_60N", "count_FI_66N", "count_NO_66N", "genusKey", "speciesKey"]
@@ -162,7 +186,7 @@ def load_data():
     laji_gbif["url"] = laji_gbif["url_laji"].fillna(laji_gbif["url_gbif"])
     laji_gbif = laji_gbif.drop(columns=["identifier_laji", "genusKey_gbif", "speciesKey_gbif", "url_laji", "url_gbif"])
 
-    print("Processing Coconut database information...")
+    log.info("Processing Coconut database information...")
     coconut = pd.read_csv(COCONUT_DB_PATH, sep="\t", low_memory=False)
     coconut = coconut.dropna(subset=["name", "identifier"])
     coconut = coconut.drop(columns=["identifier"])
@@ -187,12 +211,12 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         return None, None, None
 
     # Determine search mode and get initial data
-    print("Analyse ->",compound)
-    print("Analyse->",smile)
-    print("Analyse->", genus)
+    log.info("Analyse -> %s",compound)
+    log.info("Analyse -> %s",smile)
+    log.info("Analyse -> %s",genus)
     flag = False
     if smile:
-        print(f"Analysing SMILES '{smile}' (genus={genus})...")
+        log.info(f"Analysing SMILES '{smile}' (genus={genus})...")
         # Filter coconut for the SMILES
         res = coco[coco["canonical_smiles"] == smile].copy()
         if res.empty:
@@ -212,7 +236,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
             flag = True
     
     if compound and not flag:
-        print(f"Analysing compound '{compound}' (genus={genus})...")
+        log.info(f"Analysing compound '{compound}' (genus={genus})...")
         # Filter coconut for the compound
         res = coco[coco["name"] == compound].copy()
         if res.empty:
@@ -223,23 +247,23 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         compound = res["name"].iloc[0]
         smiles = res["canonical_smiles"].iloc[0]
 
-    print("Found -> Compound:", compound)
-    print("Found -> Smiles:", smiles)
+    log.info("Found -> Compound: %s", compound)
+    log.info("Found -> Smiles: %s", smiles)
 
     org = sorted(set([e.lower().strip() for e in org if e]))
     # keep only plants
     org = [e for e in org if infer_genus(e) in plants]
     if not org:
-        print("WARNING: No organisms found!")
+        log.info("WARNING: No organisms found!")
         return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs but the found compound name
-    print("Organisms:", len(org))
+    log.info("Organisms: %d", len(org))
 
     if genus:
         # use genus to make the search wider
         genera = [infer_genus(e) for e in org]
         genera = set([e for e in genera if e])
         if not genera:
-            print("WARNING: No genera found for organisms!")
+            log.info("WARNING: No genera found for organisms!")
             return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs
         genera = pd.DataFrame({"genus": sorted(genera)})
         genera = pd.merge(genera, db, how="left", left_on="genus", right_on="genus")
@@ -248,7 +272,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
 
     res = pd.DataFrame({"organism": org})
 
-    print("Processing Laji & GBIF database information...")
+    log.info("Processing Laji & GBIF database information...")
     res = pd.merge(res, db, how="left", left_on="organism", right_on="name")
     res = res.drop(columns=["name"])
     res = res.dropna(subset=["genus"])
@@ -313,6 +337,12 @@ def paginate_df(df: pd.DataFrame, page_size: int = RESULTS_PAGE_SIZE):
 
 def df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
     """Return an .xlsx file (as bytes) for the given DataFrame."""
+    try:
+        import openpyxl  # ensure dependency exists at runtime
+    except Exception as e:
+        st.warning("Excel export not available (openpyxl missing).")
+        log.warning("openpyxl import failed: %s", e)
+        return b""
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -391,8 +421,8 @@ if run_btn:
     use_genus = association == "genus"
     search_term = st.session_state.compound_input
 
-    print("Search ->",search_term)
-    print("Search ->",is_smiles(search_term))
+    log.info("Search -> %s",search_term)
+    log.info("Search -> %s",is_smiles(search_term))
     # Check if the input is a SMILES string or a compound name
     if is_smiles(search_term):
         results, summary, found_compound_name = analyse(compound="", smile=search_term, genus=use_genus)
@@ -436,7 +466,7 @@ if results is not None and not results.empty:
     ]
     for c in int_cols:
         if c in results_download.columns:
-            results_download[c] = results_download[c].astype("Int64")
+            results_download[c] = pd.to_numeric(results_download[c], errors="coerce").astype("Int64")
 
     header_with_download(
         "Results",

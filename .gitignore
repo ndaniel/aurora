@@ -13,4 +13,7 @@ venv/
 # OS
 .DS_Store
 
+*~
 
+# Always keep GitHub workflows
+!.github/

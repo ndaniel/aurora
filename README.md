@@ -1,4 +1,4 @@
-# Aurora
+# Aurora app
 
 [![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-ff4b4b.svg)](https://streamlit.io/)
 
@@ -23,4 +23,11 @@ pip install -r requirements.txt
 # run the app
 streamlit run aurora/app.py
 
+## Data Sources & Attribution
+
+- [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database) - CC0 license
+- [Laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) - CC-BY license
+- [GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility) - CC0/CC-BY/CC-BY-NC licenses (depending on the dataset)
+
+All rights and data terms respected according to source guidelines.
 
