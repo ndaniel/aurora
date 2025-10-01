@@ -52,7 +52,17 @@ docker run -it --rm -p 8501:8501 aurora-app
 
 All rights and data terms respected according to source guidelines.
 
-⚠️ Note: Processed data files are expected under `data/`. Some data 
+## Roadmap
+
+- [ ] Add ETL scripts for automated retrieval and cleaning of GBIF, Laji.fi, and COCONUT datasets  
+- [ ] Provide a small reproducible test dataset for CI and demo purposes  
+- [ ] Expand CI workflow (unit tests, schema validation with Pandera)  
+- [ ] Optimize data loading and performance for larger datasets  
+- [ ] Add more interactive visualizations in the Streamlit app  
+
+
+
+## ⚠️ Note: Processed data files are expected under `data/`. Some data 
 sources (Laji.fi, COCONUT) may require manual export. ETL scripts will 
 be added in a future update.
 
