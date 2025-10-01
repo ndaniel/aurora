@@ -269,7 +269,8 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         genera = pd.merge(genera, db, how="left", left_on="genus", right_on="genus")
         genera = genera.dropna(subset=["name"])
         #org = sorted(set(genera["name"].tolist()))
-        org = sorted(set([" ".join(e.split(" ")[:2]) for e in genera["name"].tolist() if e]))    
+        org = [" ".join(e.split(" ")[:2]) for e in genera["name"].tolist() if e]
+        org = sorted(set([e.replace("-ryhmä","").replace("×","") for e in org]))
 
     res = pd.DataFrame({"organism": org})
 
