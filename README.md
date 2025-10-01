@@ -1,10 +1,13 @@
-# Aurora app
+# Aurora Pilot app
 
-[![Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-ff4b4b.svg)](https://streamlit.io/)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.49-brightgreen)
+![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-lightgrey)
+
 
 [AURORA](https://aurorapilot.streamlit.app) (compounds in Nordic plants) is a Streamlit app, that integrates several plants
 databases like:
-- [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database)
+- [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database),
 - [Laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility), and
 - [GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility).
 
@@ -28,7 +31,7 @@ source .venv/bin/activate  # on Windows use: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # run the app
-streamlit run aurora/app.py
+streamlit run app.py
 ```
 
 ## Data Sources & Attribution
