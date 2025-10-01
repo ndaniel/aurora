@@ -29,6 +29,7 @@ pip install -r requirements.txt
 
 # run the app
 streamlit run aurora/app.py
+```
 
 ## Data Sources & Attribution
 
