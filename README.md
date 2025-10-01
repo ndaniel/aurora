@@ -9,6 +9,13 @@ databases like:
 - [GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility).
 
 
+## Screenshots
+
+### Main search interface
+![Search interface](docs/screenshot1.png)
+
+### Results view
+![Results table](docs/screenshot2.png)
 
 ## Quickstart (local)
 
