@@ -18,7 +18,7 @@ DEFAULT_COMPOUND = "arctigenin"
 
 DATA_DIR = "data"
 
-LIST_COMPOUNDS_PATH = os.path.join(DATA_DIR, "coconut_compounds.txt")
+# LIST_COMPOUNDS_PATH = os.path.join(DATA_DIR, "coconut_compounds.txt")
 # LIST_PLANTS_FI_NO_PATH = os.path.join(DATA_DIR, "organisms_laji_gbif_FI_NO_plants.tsv")
 COCONUT_DB_PATH = os.path.join(DATA_DIR, "coconut_csv-09-2025_FI_NO_plants.csv")
 LAJI_DB_PATH = os.path.join(DATA_DIR, "laji2_fi.txt")
@@ -85,6 +85,24 @@ def batch_infer_genus(names: str) -> str:
     s = sorted(set([infer_genus(e.strip()) for e in names.lower().strip().split("|") if e.strip()]))
     s = [e for e in s if e]
     return "|".join(s)
+
+def is_smiles(smiles_string: str) -> bool:
+    """
+    Checks very fast if a given string is a valid SMILES string without using regular expressions.
+    """
+    if not isinstance(smiles_string, str) or not smiles_string:
+        return False
+
+    smiles_string = smiles_string.strip()
+    if not smiles_string:
+        return False
+
+    allowed = {'@', '[', 'i', 'N', '/', '+', '6', 'F', '3', 'H', 'r', 'u', ']', 'L', 'C', ')', 's', '0', 'K', 'P', 'O', '.', '=', '9', 'a', 'e', '4', '2', '5', '%', '1', '#', '7', 'g', '-', '(', '8', 'b', 'S', 'o', 'M', 'I', 'A', 'l', 'B', '\\'}
+    s = set(smiles_string)
+    if s.difference(allowed):
+        return False
+
+    return True
 
 ########################################################################################
 @st.cache_data
@@ -159,40 +177,70 @@ def load_data():
     return (plants_genera, coconut, laji_gbif, compounds, smiles)
 
 ########################################################################################
-def analyse(compound: str = "arctigenin", genus: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
     """
     Analyse a compound and compute results summary.
     """
-    print(f"Analysing compound '{compound}' (genus={genus})...")
+    # Handle empty input gracefully
+    if not compound and not smile:
+        #st.warning("Please enter a compound name or SMILES string.")
+        return None, None, None
 
-    # Filter coconut for the compound
-    res = coco[coco["name"] == compound].copy()
-    if res.empty:
-        st.warning(f"No data found for compound '{compound}' in coconut database.")
-        return None, None
+    # Determine search mode and get initial data
+    print("Analyse ->",compound)
+    print("Analyse->",smile)
+    print("Analyse->", genus)
+    flag = False
+    if smile:
+        print(f"Analysing SMILES '{smile}' (genus={genus})...")
+        # Filter coconut for the SMILES
+        res = coco[coco["canonical_smiles"] == smile].copy()
+        if res.empty:
+             #st.warning(f"No data found for SMILES '{smile}' in coconut database.")
+             #return None, None, None
+             # maybe is a compound name?
+            res = coco[coco["name"] == smile].copy()
+            if res.empty:
+                #st.warning(f"No data found for compound '{smile}' in coconut database.")
+                return None, None, None
+            compound = smile 
+        else:
+            # Take the first result
+            org = res["organisms"].iloc[0].split("|")
+            compound = res["name"].iloc[0] # Set compound name from SMILES lookup
+            smiles = res["canonical_smiles"].iloc[0]
+            flag = True
+    
+    if compound and not flag:
+        print(f"Analysing compound '{compound}' (genus={genus})...")
+        # Filter coconut for the compound
+        res = coco[coco["name"] == compound].copy()
+        if res.empty:
+            #st.warning(f"No data found for compound '{compound}' in coconut database.")
+            return None, None, None
+        # take the first one
+        org = res["organisms"].iloc[0].split("|")
+        compound = res["name"].iloc[0]
+        smiles = res["canonical_smiles"].iloc[0]
 
-    # take the first one
-    org = res["organisms"].iloc[0].split("|")
-    smiles = res["canonical_smiles"].iloc[0]
-
-    print("Compound:", compound)
-    print("Smiles:", smiles)
+    print("Found -> Compound:", compound)
+    print("Found -> Smiles:", smiles)
 
     org = sorted(set([e.lower().strip() for e in org if e]))
     # keep only plants
     org = [e for e in org if infer_genus(e) in plants]
     if not org:
         print("WARNING: No organisms found!")
-        return None, None
+        return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs but the found compound name
     print("Organisms:", len(org))
 
     if genus:
         # use genus to make the search wider
         genera = [infer_genus(e) for e in org]
         genera = set([e for e in genera if e])
-        if not org:
-            print("WARNING: No organisms found!")
-            return None, None
+        if not genera:
+            print("WARNING: No genera found for organisms!")
+            return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs
         genera = pd.DataFrame({"genus": sorted(genera)})
         genera = pd.merge(genera, db, how="left", left_on="genus", right_on="genus")
         genera = genera.dropna(subset=["name"])
@@ -220,6 +268,8 @@ def analyse(compound: str = "arctigenin", genus: bool = False) -> Tuple[pd.DataF
     res = res.sort_values(by=["obs. in Finland (laji)", "obs. in Finland (gbif)", "obs. in Norway (gbif)"], ascending=[False, False, False])
 
     results = res.copy()
+    # actually here are only plants
+    results.rename(columns={"organism": "plant"}, inplace=True)
 
     # Compute counts and percentages
     counts = res["genus"].value_counts(normalize=False, dropna=False)
@@ -232,7 +282,7 @@ def analyse(compound: str = "arctigenin", genus: bool = False) -> Tuple[pd.DataF
     )
     summary = summary.sort_values(by=["count", "genus"], ascending=[False, True])
 
-    return (results, summary)
+    return (results, summary, compound)
 
 # Load data once at startup
 (plants, coco, db, compounds, smiles) = load_data()
@@ -286,8 +336,8 @@ def header_with_download(title: str, df: pd.DataFrame, filename: str):
 # --- Renderers ---
 def render_results_table(df: pd.DataFrame):
     """Render Results with organism names as clickable links (no header sorting), 30 rows/page."""
-    if "organism" not in df.columns:
-        st.warning("Expected column 'organism' is missing from results")
+    if "plant" not in df.columns:
+        st.warning("Expected column 'plant' is missing from results")
         return
     df = df.copy()
 
@@ -296,12 +346,12 @@ def render_results_table(df: pd.DataFrame):
         df = df.drop(columns=["genus"])
     if "url" in df.columns:
         def mk_link(row):
-            name = str(row.get("organism", ""))
+            name = str(row.get("plant", ""))
             href = str(row.get("url", ""))
             if href and href.lower().startswith(("http://", "https://")):
                 return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{name}</a>'
             return name
-        df["organism"] = df.apply(mk_link, axis=1)
+        df["plant"] = df.apply(mk_link, axis=1)
         df = df.drop(columns=["url"])
 
     # Paginate BEFORE rendering (keeps HTML links fast)
@@ -317,12 +367,12 @@ def render_results_table(df: pd.DataFrame):
 # --- Controls (with keys so values persist naturally) ---
 c1, c2, c3 = st.columns([3, 2, 1])
 with c1:
-    compound = st.selectbox(
+    # Text input allows free-form entry for names or SMILES strings
+    compound = st.text_input(
         "Compound",
-        compounds,
-        index=(compounds.index(DEFAULT_COMPOUND) if DEFAULT_COMPOUND in compounds else 0),
-        key="compound_sel",
-        help="Choose a compound from the coconut database",
+        value=st.session_state.get("compound_input", DEFAULT_COMPOUND),
+        key="compound_input",
+        help="Enter a compound name.",
     )
 with c2:
     association = st.radio(
@@ -338,25 +388,39 @@ with c3:
 
 # --- Action: compute on button, always render from session state ---
 if run_btn:
-    # compute
-    if association == "genus":
-        results, summary = analyse(compound, genus=True)
-    else:
-        results, summary = analyse(compound, genus=False)
+    use_genus = association == "genus"
+    search_term = st.session_state.compound_input
 
-    # store
+    print("Search ->",search_term)
+    print("Search ->",is_smiles(search_term))
+    # Check if the input is a SMILES string or a compound name
+    if is_smiles(search_term):
+        results, summary, found_compound_name = analyse(compound="", smile=search_term, genus=use_genus)
+        # If a result was found, update the selectbox to show the compound name
+        if found_compound_name:
+            # Store the results from the SMILES search
+            st.session_state["results"] = results
+            st.session_state["summary"] = summary
+            # Update the state for the input box and association, then rerun to show the name
+            search_term = found_compound_name
+            st.session_state.last_compound = found_compound_name
+            st.session_state.last_association = association
+            st.rerun() # This will now redraw the page with the results already in the state
+    else:
+        results, summary, _ = analyse(compound=search_term, smile="", genus=use_genus)
+
     st.session_state["results"] = results
     st.session_state["summary"] = summary
-    st.session_state["last_compound"] = compound
+    st.session_state["last_compound"] = search_term
     st.session_state["last_association"] = association
 
 # pull from state for rendering (survives reruns like download clicks)
 results = st.session_state.get("results")
 summary = st.session_state.get("summary")
-compound = st.session_state.get("last_compound", compound)
-association = st.session_state.get("last_association", association)
+compound = st.session_state.get("last_compound", DEFAULT_COMPOUND)
+association = st.session_state.get("last_association", "species")
 
-if results is not None and summary is not None:
+if results is not None and not results.empty:
     st.divider()
 
     # ---- Results table + download ----
@@ -395,12 +459,14 @@ if results is not None and summary is not None:
         column_config={"#": st.column_config.NumberColumn("#", width="small", disabled=True)},
     )
     st.caption(f"{len(s_show)} rows")
+elif run_btn: # Only show "No results" if a search was just performed
+    st.divider()
+    st.info("No results found for the given criteria.")
 else:
-    st.caption("Tip: Start typing in the selector to filter a long compound list.")
+    st.caption("Enter a compound name and click 'Find'.")
 
 st.caption(
     "**Data sources:** [COCONUT](https://coconut.naturalproducts.net/) (Collection of Open Natural Products database), "
     "[Laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) and "
     "[GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility)."
 )
-
