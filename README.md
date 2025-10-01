@@ -62,7 +62,9 @@ All rights and data terms respected according to source guidelines.
 
 
 
-## ⚠️ Note: Processed data files are expected under `data/`. Some data 
+## ⚠️ Note
+
+Processed data files are expected under `data/`. Some data 
 sources (Laji.fi, COCONUT) may require manual export. ETL scripts will 
 be added in a future update.
 
