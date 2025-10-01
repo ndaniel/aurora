@@ -223,11 +223,11 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
              #st.warning(f"No data found for SMILES '{smile}' in coconut database.")
              #return None, None, None
              # maybe is a compound name?
-            res = coco[coco["name"] == smile].copy()
+            res = coco[coco["name"] == smile.lower()].copy()
             if res.empty:
                 #st.warning(f"No data found for compound '{smile}' in coconut database.")
                 return None, None, None
-            compound = smile 
+            compound = smile.lower()
         else:
             # Take the first result
             org = res["organisms"].iloc[0].split("|")
@@ -238,7 +238,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
     if compound and not flag:
         log.info(f"Analysing compound '{compound}' (genus={genus})...")
         # Filter coconut for the compound
-        res = coco[coco["name"] == compound].copy()
+        res = coco[coco["name"] == compound.lower()].copy()
         if res.empty:
             #st.warning(f"No data found for compound '{compound}' in coconut database.")
             return None, None, None
