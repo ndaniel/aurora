@@ -1,3 +1,0 @@
-on the webpage I get this warning in yeallow text box:
-
-The widget with key "compound_input" was created with a default value but also had its value set via the Session State API.
