@@ -9,12 +9,26 @@ import os
 import sys
 import math
 import io
+from html import escape
 from typing import Tuple
+from urllib.parse import quote_plus, unquote_plus
 
 import pandas as pd
 import streamlit as st
 
 import logging
+
+try:
+    from rdkit import Chem, DataStructs
+    from rdkit.Chem import AllChem
+    from rdkit.Chem import rdFingerprintGenerator as rfg
+    RDKit_AVAILABLE = True
+except Exception:  # pragma: no cover - RDKit required for similarity features
+    Chem = None
+    DataStructs = None
+    AllChem = None
+    rfg = None
+    RDKit_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("aurora")
@@ -45,9 +59,27 @@ for k, v in {
     "compound_input": DEFAULT_COMPOUND,
     "auto_run": False,
     "searched_via_smiles": False,
+    "similarity_table": None,
+    "active_smiles_query": None,
+    "similarity_error": None,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+QUERY_PARAM_KEY = "select_compound"
+query_params = st.query_params if hasattr(st, "query_params") else {}
+selected_values = query_params.get(QUERY_PARAM_KEY, []) if isinstance(query_params, dict) else []
+if not isinstance(selected_values, list):
+    selected_values = [selected_values]
+if selected_values:
+    selected_name = unquote_plus(selected_values[0])
+    if selected_name:
+        st.session_state["pending_compound"] = selected_name
+        st.session_state["pending_association"] = st.session_state.get("association_sel", "species")
+        st.session_state["auto_run"] = True
+    # Clear the query param so we don't loop on rerun
+    if hasattr(st, "query_params"):
+        st.query_params = {}
 
 if st.session_state.get("pending_association"):
     st.session_state["association_sel"] = st.session_state.pop("pending_association")
@@ -81,6 +113,40 @@ st.markdown(
 
 # Results pagination size
 RESULTS_PAGE_SIZE = 30
+
+SIM_FP_RADIUS = 2
+SIM_FP_BITS = 2048
+SIMILARITY_MAX_ROWS = 500
+
+def _make_morgan_count_gen(radius: int = 2):
+    if not RDKit_AVAILABLE or rfg is None:
+        return None
+    try:
+        return rfg.GetMorganGenerator(radius=radius)
+    except Exception:
+        return None
+
+SIM_COUNT_GEN = _make_morgan_count_gen(SIM_FP_RADIUS)
+
+
+def _make_morgan_bit_gen(radius: int = 2, nbits: int = 2048):
+    if not RDKit_AVAILABLE or rfg is None:
+        return None
+    try:
+        return rfg.GetMorganGenerator(
+            radius=radius,
+            includeChirality=True,
+            useBondTypes=True,
+            fpSize=nbits,
+        )
+    except TypeError:
+        try:
+            return rfg.GetMorganGenerator(radius, False, True, True, False, True, None, nbits)
+        except Exception:
+            return None
+
+
+SIM_BIT_GEN = _make_morgan_bit_gen(SIM_FP_RADIUS, SIM_FP_BITS)
 
 st.title("AURORA Pilot (compounds in Nordic plants)")
 st.markdown("_Daniel Nicorici, Juha Klefström — University of Helsinki_")
@@ -337,12 +403,20 @@ def add_row_id_offset(df: pd.DataFrame, start: int, colname: str = "#") -> pd.Da
     df.insert(0, colname, range(start + 1, start + 1 + len(df)))
     return df
 
-def paginate_df(df: pd.DataFrame, page_size: int = RESULTS_PAGE_SIZE):
+def paginate_df(df: pd.DataFrame, page_size: int = RESULTS_PAGE_SIZE, widget_key: str | None = None):
     total = len(df)
     pages = max(1, math.ceil(total / page_size))
     left, right = st.columns([1, 3])
     with left:
-        page = st.number_input("Page", min_value=1, max_value=pages, value=1, step=1)
+        number_input_kwargs = {
+            "min_value": 1,
+            "max_value": pages,
+            "value": 1,
+            "step": 1,
+        }
+        if widget_key:
+            number_input_kwargs["key"] = f"{widget_key}_page"
+        page = st.number_input("Page", **number_input_kwargs)
     with right:
         st.caption(f"{total} rows • {pages} pages • {page_size} rows/page")
     start = (page - 1) * page_size
@@ -399,14 +473,223 @@ def render_results_table(df: pd.DataFrame):
         df = df.drop(columns=["url"])
 
     # Paginate BEFORE rendering (keeps HTML links fast)
-    page_df, start, total = paginate_df(df, page_size=RESULTS_PAGE_SIZE)
+    page_df, start, total = paginate_df(df, page_size=RESULTS_PAGE_SIZE, widget_key="results")
 
     # Add row id with offset
     page_df = add_row_id_offset(page_df, start)
 
     # Render as HTML to preserve links (no sorting)
+    st.markdown(
+        """
+        <style>
+        table.similarity-table td:nth-child(2),
+        table.similarity-table th:nth-child(2) {
+            min-width: 600px;
+            width: 600px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    table_html = page_df.to_html(escape=False, index=False, classes="similarity-table")
+    st.markdown(table_html, unsafe_allow_html=True)
+    st.caption(f"Showing rows {start+1}–{start+len(page_df)} of {total}")
+
+
+def _mol_from_smiles_safe(smiles: str):
+    if not RDKit_AVAILABLE or Chem is None:
+        return None
+    if not isinstance(smiles, str) or not smiles.strip():
+        return None
+    try:
+        return Chem.MolFromSmiles(smiles, sanitize=True)
+    except Exception:
+        return None
+
+
+def _fingerprint_from_mol(mol):
+    if not RDKit_AVAILABLE or mol is None:
+        return None
+    if SIM_COUNT_GEN is not None:
+        try:
+            return SIM_COUNT_GEN.GetCountFingerprint(mol)
+        except AttributeError:
+            try:
+                return SIM_COUNT_GEN.GetFingerprint(mol, countSimulation=True)
+            except Exception:
+                pass
+    if AllChem is not None:
+        try:
+            return AllChem.GetMorganFingerprint(mol, radius=SIM_FP_RADIUS)
+        except Exception:
+            return None
+    return None
+
+
+def compute_tanimoto_scores(reference_smiles: str, smiles_list: list[str], fp_radius: int = SIM_FP_RADIUS, nbits: int = SIM_FP_BITS):
+    if not RDKit_AVAILABLE or DataStructs is None or AllChem is None:
+        return [None] * len(smiles_list)
+    ref_smiles = reference_smiles.strip() if isinstance(reference_smiles, str) else reference_smiles
+    ref_mol = _mol_from_smiles_safe(ref_smiles)
+    if ref_mol is None:
+        return [None] * len(smiles_list)
+    ref_fp = None
+    if SIM_BIT_GEN is not None:
+        try:
+            ref_fp = SIM_BIT_GEN.GetFingerprint(ref_mol)
+        except Exception:
+            ref_fp = None
+    if ref_fp is None:
+        try:
+            ref_fp = AllChem.GetMorganFingerprintAsBitVect(ref_mol, radius=fp_radius, nBits=nbits)
+        except Exception:
+            return [None] * len(smiles_list)
+
+    scores = []
+    for smi in smiles_list:
+        mol = _mol_from_smiles_safe(smi)
+        if mol is None:
+            scores.append(None)
+            continue
+        try:
+            if SIM_BIT_GEN is not None:
+                fp = SIM_BIT_GEN.GetFingerprint(mol)
+            else:
+                fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=fp_radius, nBits=nbits)
+            sim = DataStructs.TanimotoSimilarity(fp, ref_fp)
+            scores.append(round(float(sim), 3))
+        except Exception:
+            scores.append(None)
+    return scores
+
+
+def compute_tversky_dice_scores(reference_smiles: str, smiles_list: list[str], alpha: float = 0.7, beta: float = 0.3):
+    if not RDKit_AVAILABLE or DataStructs is None:
+        return [None] * len(smiles_list), [None] * len(smiles_list)
+    ref_mol = _mol_from_smiles_safe(reference_smiles)
+    ref_fp = _fingerprint_from_mol(ref_mol)
+    if ref_fp is None:
+        return [None] * len(smiles_list), [None] * len(smiles_list)
+
+    tversky_scores = []
+    dice_scores = []
+
+    def _round_score(val):
+        try:
+            f_val = float(val)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(f_val):
+            return None
+        return round(f_val, 3)
+
+    for smi in smiles_list:
+        mol = _mol_from_smiles_safe(smi)
+        fp = _fingerprint_from_mol(mol)
+        if fp is None:
+            tversky_scores.append(None)
+            dice_scores.append(None)
+            continue
+        try:
+            t_val = DataStructs.TverskySimilarity(fp, ref_fp, a=alpha, b=beta)
+        except Exception:
+            t_val = None
+        try:
+            d_val = DataStructs.DiceSimilarity(fp, ref_fp)
+        except Exception:
+            d_val = None
+        tversky_scores.append(_round_score(t_val))
+        dice_scores.append(_round_score(d_val))
+    return tversky_scores, dice_scores
+
+
+def build_similarity_table(query_smiles: str) -> pd.DataFrame:
+    if not (RDKit_AVAILABLE and AllChem is not None and coco is not None):
+        log.warning("Similarity disabled: RDKit=%s", RDKit_AVAILABLE)
+        return pd.DataFrame()
+    if not isinstance(query_smiles, str) or not query_smiles.strip():
+        return pd.DataFrame()
+    query_smiles = query_smiles.strip()
+
+    df = coco[["name", "canonical_smiles"]].dropna().copy()
+    df["canonical_smiles"] = df["canonical_smiles"].astype(str).str.strip()
+    df = df[df["canonical_smiles"] != ""]
+    df = df.drop_duplicates(subset=["name", "canonical_smiles"]).reset_index(drop=True)
+    log.info("Similarity base set size: %d", len(df))
+    if df.empty:
+        return pd.DataFrame()
+
+    smiles_list = df["canonical_smiles"].tolist()
+    tanimoto_scores = compute_tanimoto_scores(query_smiles, smiles_list)
+    log.info("Computed tanimoto scores: %d", sum(1 for x in tanimoto_scores if x is not None))
+    tversky_scores, dice_scores = compute_tversky_dice_scores(query_smiles, smiles_list)
+    log.info("Computed tversky scores: %d", sum(1 for x in tversky_scores if x is not None))
+
+    df = df.assign(
+        tanimoto=tanimoto_scores,
+        tversky=tversky_scores,
+        dice=dice_scores,
+    )
+    df = df.dropna(subset=["tanimoto"])
+    log.info("Similarity rows after dropna: %d", len(df))
+    if df.empty:
+        return pd.DataFrame()
+
+    df = df.rename(columns={"name": "compound", "canonical_smiles": "smiles"})
+    df = df.sort_values(by="tanimoto", ascending=False).head(SIMILARITY_MAX_ROWS).reset_index(drop=True)
+    return df
+
+
+def render_similarity_table(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("No similarity scores available for this SMILES input.")
+        return
+
+    display_df = df.copy()
+    display_df = display_df[["compound", "tanimoto", "tversky", "dice"]]
+    display_df.columns = ["Compound", "Tanimoto", "Tversky", "Dice"]
+
+    for col in ["Tanimoto", "Tversky", "Dice"]:
+        display_df[col] = display_df[col].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "")
+
+    page_df, start, total = paginate_df(display_df, page_size=RESULTS_PAGE_SIZE, widget_key="similarity")
+    page_df = add_row_id_offset(page_df, start)
+
+    def _compound_link(name: str) -> str:
+        safe_name = escape(name)
+        return f'<a href="?{QUERY_PARAM_KEY}={quote_plus(name)}">{safe_name}</a>'
+
+    page_df["Compound"] = page_df["Compound"].apply(_compound_link)
+
     st.markdown(page_df.to_html(escape=False, index=False), unsafe_allow_html=True)
     st.caption(f"Showing rows {start+1}–{start+len(page_df)} of {total}")
+
+
+def display_similarity_section(similarity_df: pd.DataFrame, compound_name: str | None, show_compound_heading: bool):
+    if similarity_df is None or similarity_df.empty:
+        return
+
+    download_similarity = similarity_df[["compound", "tanimoto", "tversky", "dice"]].copy()
+    for col in ["tanimoto", "tversky", "dice"]:
+        download_similarity[col] = download_similarity[col].apply(lambda x: round(x, 3) if isinstance(x, (int, float)) else x)
+    download_similarity = download_similarity.rename(
+        columns={
+            "compound": "Compound",
+            "tanimoto": "Tanimoto",
+            "tversky": "Tversky",
+            "dice": "Dice",
+        }
+    )
+
+    filename_base = compound_name if compound_name else "smiles_search"
+    safe_base = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in filename_base) or "smiles_search"
+    safe_base = safe_base[:80]
+    header_with_download(
+        "SMILES similarity",
+        download_similarity,
+        filename=f"similarity_{safe_base}.xlsx",
+    )
+    render_similarity_table(similarity_df)
 
 # --- Controls (with keys so values persist naturally) ---
 c1, c2, c3 = st.columns([3, 1, 3], vertical_alignment="bottom")
@@ -436,33 +719,43 @@ if run_btn or auto_run_trigger:
     search_triggered = True
     use_genus = association == "genus"
     search_term = st.session_state.compound_input
+    input_is_smiles = is_smiles(search_term)
+    st.session_state["suggestions"] = []
+
+    normalized_smiles = search_term.strip() if isinstance(search_term, str) else search_term
+
+    if run_btn and input_is_smiles:
+        with st.spinner("Computing similarity scores..."):
+            similarity_df = build_similarity_table(normalized_smiles)
+        if similarity_df is not None and not similarity_df.empty:
+            st.session_state["similarity_table"] = similarity_df.copy()
+            st.session_state["active_smiles_query"] = normalized_smiles
+            st.session_state["similarity_error"] = None
+        else:
+            st.session_state["similarity_table"] = None
+            st.session_state["active_smiles_query"] = None
+            st.session_state["similarity_error"] = "No valid similarity scores were computed for the provided SMILES."
+    elif run_btn and not input_is_smiles:
+        st.session_state["similarity_table"] = None
+        st.session_state["active_smiles_query"] = None
+        st.session_state["similarity_error"] = None
+
     found_compound_name = None
     found_smile = None
+    results = None
+    summary = None
 
-    log.info("Search -> %s",search_term)
-    log.info("Search -> %s",is_smiles(search_term))
-    st.session_state["suggestions"] = []
-    st.session_state["searched_via_smiles"] = False
-    # Check if the input is a SMILES string or a compound name
-    if is_smiles(search_term):
-        results, summary, found_compound_name, found_smile = analyse(compound="", smile=search_term, genus=use_genus)
-        # If a result was found, update the selectbox to show the compound name
-        if found_compound_name:
-            # Store the results from the SMILES search
-            st.session_state["results"] = results
-            st.session_state["summary"] = summary
-            st.session_state["last_smiles"] = found_smile
-            st.session_state["searched_via_smiles"] = True
-            # Update the state for the input box and association, then rerun to show the name
-            search_term = found_compound_name
-            st.session_state.last_compound = found_compound_name
-            st.session_state.last_association = association
-            st.session_state["suggestions"] = []
-            st.rerun() # This will now redraw the page with the results already in the state
+    log.info("Search -> %s", search_term)
+    log.info("Search -> %s", input_is_smiles)
+
+    if input_is_smiles:
+        # For SMILES inputs we only display similarity scores; clear any previous results
+        st.session_state["results"] = None
+        st.session_state["summary"] = None
+        st.session_state["last_smiles"] = normalized_smiles
     else:
         results, summary, found_compound_name, found_smile = analyse(compound=search_term, smile="", genus=use_genus)
         if results is None:
-            # No exact match; offer substring suggestions instead of empty results
             query = (search_term or "").strip().lower()
             if query:
                 matches = [c for c in compounds if query in c]
@@ -472,21 +765,20 @@ if run_btn or auto_run_trigger:
             st.session_state["last_compound"] = search_term
             st.session_state["last_association"] = association
             st.session_state["last_smiles"] = None
-            st.session_state["searched_via_smiles"] = False
+            st.session_state["active_smiles_query"] = None
+            st.session_state["similarity_table"] = None
+            st.session_state["similarity_error"] = None
         else:
-            st.session_state["suggestions"] = []
+            st.session_state["results"] = results
+            st.session_state["summary"] = summary
             if found_compound_name:
                 search_term = found_compound_name
-            st.session_state["searched_via_smiles"] = False
+            st.session_state["last_smiles"] = found_smile
+            st.session_state["similarity_error"] = None
 
-    # Update session state with the latest search context unless we already reran
-    if "results" in locals():
-        st.session_state["results"] = results
-        st.session_state["summary"] = summary
-    if "found_smile" in locals():
-        st.session_state["last_smiles"] = found_smile
-    st.session_state["last_compound"] = search_term
+    st.session_state["last_compound"] = normalized_smiles if input_is_smiles else search_term
     st.session_state["last_association"] = association
+    st.session_state["searched_via_smiles"] = bool(st.session_state.get("active_smiles_query"))
 
 # pull from state for rendering (survives reruns like download clicks)
 results = st.session_state.get("results")
@@ -495,12 +787,17 @@ compound = st.session_state.get("last_compound", DEFAULT_COMPOUND)
 association = st.session_state.get("last_association", "species")
 suggestions = st.session_state.get("suggestions", [])
 compound_smiles = st.session_state.get("last_smiles")
+similarity_df = st.session_state.get("similarity_table")
+if isinstance(similarity_df, pd.DataFrame) and similarity_df.empty:
+    similarity_df = None
+active_smiles_query = st.session_state.get("active_smiles_query")
+similarity_error = st.session_state.get("similarity_error")
 
 if results is not None and not results.empty:
     st.divider()
 
-    if st.session_state.get("searched_via_smiles") and compound:
-        st.subheader(f"Compound: {compound}")
+    if similarity_df is not None:
+        display_similarity_section(similarity_df, compound, show_compound_heading=True)
 
     # ---- Results table + download ----
     results_download = results.copy()
@@ -541,6 +838,12 @@ if results is not None and not results.empty:
     if compound_smiles:
         st.subheader("Canonical SMILES")
         st.code(compound_smiles, language="text")
+elif similarity_df is not None:
+    st.divider()
+    display_similarity_section(similarity_df, active_smiles_query, show_compound_heading=True)
+elif similarity_error:
+    st.divider()
+    st.info(similarity_error)
 elif suggestions:
     st.divider()
     st.info("No exact match found. Choose one of the suggested compounds below:")
@@ -554,6 +857,9 @@ elif suggestions:
                 st.session_state["pending_association"] = pending_association
                 st.session_state["suggestions"] = []
                 st.session_state["searched_via_smiles"] = False
+                st.session_state["similarity_table"] = None
+                st.session_state["active_smiles_query"] = None
+                st.session_state["similarity_error"] = None
                 st.session_state["auto_run"] = True
                 st.rerun()
 elif search_triggered: # Only show "No results" if a search was just performed
