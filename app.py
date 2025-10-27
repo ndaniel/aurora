@@ -40,9 +40,20 @@ for k, v in {
     "summary": None,
     "last_compound": None,
     "last_association": "species",
+    "last_smiles": None,
+    "suggestions": [],
+    "compound_input": DEFAULT_COMPOUND,
+    "auto_run": False,
+    "searched_via_smiles": False,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+if st.session_state.get("pending_association"):
+    st.session_state["association_sel"] = st.session_state.pop("pending_association")
+if st.session_state.get("pending_compound"):
+    st.session_state["compound_input"] = st.session_state.pop("pending_compound")
+    st.session_state["auto_run"] = True
 
 # Cap the overall content width and shrink the first (#) column
 st.markdown(
@@ -201,19 +212,20 @@ def load_data():
     return (plants_genera, coconut, laji_gbif, compounds, smiles)
 
 ########################################################################################
-def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
+def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, str, str]:
     """
     Analyse a compound and compute results summary.
     """
     # Handle empty input gracefully
     if not compound and not smile:
         #st.warning("Please enter a compound name or SMILES string.")
-        return None, None, None
+        return None, None, None, None
 
     # Determine search mode and get initial data
     log.info("Analyse -> %s",compound)
     log.info("Analyse -> %s",smile)
     log.info("Analyse -> %s",genus)
+    smiles_value = None
     flag = False
     if smile:
         log.info(f"Analysing SMILES '{smile}' (genus={genus})...")
@@ -221,18 +233,18 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         res = coco[coco["canonical_smiles"] == smile].copy()
         if res.empty:
              #st.warning(f"No data found for SMILES '{smile}' in coconut database.")
-             #return None, None, None
+             #return None, None, None, None
              # maybe is a compound name?
             res = coco[coco["name"] == smile.lower()].copy()
             if res.empty:
                 #st.warning(f"No data found for compound '{smile}' in coconut database.")
-                return None, None, None
+                return None, None, None, None
             compound = smile.lower()
         else:
             # Take the first result
             org = res["organisms"].iloc[0].split("|")
             compound = res["name"].iloc[0] # Set compound name from SMILES lookup
-            smiles = res["canonical_smiles"].iloc[0]
+            smiles_value = res["canonical_smiles"].iloc[0]
             flag = True
     
     if compound and not flag:
@@ -241,21 +253,21 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         res = coco[coco["name"] == compound.lower()].copy()
         if res.empty:
             #st.warning(f"No data found for compound '{compound}' in coconut database.")
-            return None, None, None
+            return None, None, None, None
         # take the first one
         org = res["organisms"].iloc[0].split("|")
         compound = res["name"].iloc[0]
-        smiles = res["canonical_smiles"].iloc[0]
+        smiles_value = res["canonical_smiles"].iloc[0]
 
     log.info("Found -> Compound: %s", compound)
-    log.info("Found -> Smiles: %s", smiles)
+    log.info("Found -> SMILES: %s", smiles_value)
 
     org = sorted(set([e.lower().strip() for e in org if e]))
     # keep only plants
     org = [e for e in org if infer_genus(e) in plants]
     if not org:
         log.info("WARNING: No organisms found!")
-        return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs but the found compound name
+        return pd.DataFrame(), pd.DataFrame(), compound, smiles_value # Return empty DFs but the found compound name
     log.info("Organisms: %d", len(org))
 
     if genus:
@@ -264,7 +276,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
         genera = set([e for e in genera if e])
         if not genera:
             log.info("WARNING: No genera found for organisms!")
-            return pd.DataFrame(), pd.DataFrame(), compound # Return empty DFs
+            return pd.DataFrame(), pd.DataFrame(), compound, smiles_value # Return empty DFs
         genera = pd.DataFrame({"genus": sorted(genera)})
         genera = pd.merge(genera, db, how="left", left_on="genus", right_on="genus")
         genera = genera.dropna(subset=["name"])
@@ -308,7 +320,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
     )
     summary = summary.sort_values(by=["count", "genus"], ascending=[False, True])
 
-    return (results, summary, compound)
+    return (results, summary, compound, smiles_value)
 
 # Load data once at startup
 (plants, coco, db, compounds, smiles) = load_data()
@@ -397,16 +409,17 @@ def render_results_table(df: pd.DataFrame):
     st.caption(f"Showing rows {start+1}–{start+len(page_df)} of {total}")
 
 # --- Controls (with keys so values persist naturally) ---
-c1, c2, c3 = st.columns([3, 2, 1])
+c1, c2, c3 = st.columns([3, 1, 3], vertical_alignment="bottom")
 with c1:
     # Text input allows free-form entry for names or SMILES strings
     compound = st.text_input(
         "Compound",
-        value=st.session_state.get("compound_input", DEFAULT_COMPOUND),
         key="compound_input",
         help="Enter a compound name.",
     )
 with c2:
+    run_btn = st.button("Find", type="primary", use_container_width=True)
+with c3:
     association = st.radio(
         "Association",
         ["species", "genus"],
@@ -415,34 +428,63 @@ with c2:
         horizontal=True,
         help="Choose the aggregation level (for display/reporting).",
     )
-with c3:
-    run_btn = st.button("Find", type="primary")
 
 # --- Action: compute on button, always render from session state ---
-if run_btn:
+auto_run_trigger = st.session_state.pop("auto_run", False)
+search_triggered = False
+if run_btn or auto_run_trigger:
+    search_triggered = True
     use_genus = association == "genus"
     search_term = st.session_state.compound_input
+    found_compound_name = None
+    found_smile = None
 
     log.info("Search -> %s",search_term)
     log.info("Search -> %s",is_smiles(search_term))
+    st.session_state["suggestions"] = []
+    st.session_state["searched_via_smiles"] = False
     # Check if the input is a SMILES string or a compound name
     if is_smiles(search_term):
-        results, summary, found_compound_name = analyse(compound="", smile=search_term, genus=use_genus)
+        results, summary, found_compound_name, found_smile = analyse(compound="", smile=search_term, genus=use_genus)
         # If a result was found, update the selectbox to show the compound name
         if found_compound_name:
             # Store the results from the SMILES search
             st.session_state["results"] = results
             st.session_state["summary"] = summary
+            st.session_state["last_smiles"] = found_smile
+            st.session_state["searched_via_smiles"] = True
             # Update the state for the input box and association, then rerun to show the name
             search_term = found_compound_name
             st.session_state.last_compound = found_compound_name
             st.session_state.last_association = association
+            st.session_state["suggestions"] = []
             st.rerun() # This will now redraw the page with the results already in the state
     else:
-        results, summary, _ = analyse(compound=search_term, smile="", genus=use_genus)
+        results, summary, found_compound_name, found_smile = analyse(compound=search_term, smile="", genus=use_genus)
+        if results is None:
+            # No exact match; offer substring suggestions instead of empty results
+            query = (search_term or "").strip().lower()
+            if query:
+                matches = [c for c in compounds if query in c]
+                st.session_state["suggestions"] = matches[:30]
+            st.session_state["results"] = None
+            st.session_state["summary"] = None
+            st.session_state["last_compound"] = search_term
+            st.session_state["last_association"] = association
+            st.session_state["last_smiles"] = None
+            st.session_state["searched_via_smiles"] = False
+        else:
+            st.session_state["suggestions"] = []
+            if found_compound_name:
+                search_term = found_compound_name
+            st.session_state["searched_via_smiles"] = False
 
-    st.session_state["results"] = results
-    st.session_state["summary"] = summary
+    # Update session state with the latest search context unless we already reran
+    if "results" in locals():
+        st.session_state["results"] = results
+        st.session_state["summary"] = summary
+    if "found_smile" in locals():
+        st.session_state["last_smiles"] = found_smile
     st.session_state["last_compound"] = search_term
     st.session_state["last_association"] = association
 
@@ -451,9 +493,14 @@ results = st.session_state.get("results")
 summary = st.session_state.get("summary")
 compound = st.session_state.get("last_compound", DEFAULT_COMPOUND)
 association = st.session_state.get("last_association", "species")
+suggestions = st.session_state.get("suggestions", [])
+compound_smiles = st.session_state.get("last_smiles")
 
 if results is not None and not results.empty:
     st.divider()
+
+    if st.session_state.get("searched_via_smiles") and compound:
+        st.subheader(f"Compound: {compound}")
 
     # ---- Results table + download ----
     results_download = results.copy()
@@ -491,7 +538,25 @@ if results is not None and not results.empty:
         column_config={"#": st.column_config.NumberColumn("#", width="small", disabled=True)},
     )
     st.caption(f"{len(s_show)} rows")
-elif run_btn: # Only show "No results" if a search was just performed
+    if compound_smiles:
+        st.subheader("Canonical SMILES")
+        st.code(compound_smiles, language="text")
+elif suggestions:
+    st.divider()
+    st.info("No exact match found. Choose one of the suggested compounds below:")
+    cols = st.columns(3)
+    for idx, name in enumerate(suggestions):
+        col = cols[idx % len(cols)]
+        with col:
+            if st.button(name, key=f"suggestion_{idx}"):
+                pending_association = st.session_state.get("association_sel", "species")
+                st.session_state["pending_compound"] = name
+                st.session_state["pending_association"] = pending_association
+                st.session_state["suggestions"] = []
+                st.session_state["searched_via_smiles"] = False
+                st.session_state["auto_run"] = True
+                st.rerun()
+elif search_triggered: # Only show "No results" if a search was just performed
     st.divider()
     st.info("No results found for the given criteria.")
 else:
