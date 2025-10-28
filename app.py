@@ -799,6 +799,10 @@ if results is not None and not results.empty:
     if similarity_df is not None:
         display_similarity_section(similarity_df, compound, show_compound_heading=True)
 
+    if compound_smiles:
+        st.subheader("Canonical SMILES")
+        st.code(compound_smiles, language="text")
+
     # ---- Results table + download ----
     results_download = results.copy()
     int_cols = [
@@ -835,9 +839,6 @@ if results is not None and not results.empty:
         column_config={"#": st.column_config.NumberColumn("#", width="small", disabled=True)},
     )
     st.caption(f"{len(s_show)} rows")
-    if compound_smiles:
-        st.subheader("Canonical SMILES")
-        st.code(compound_smiles, language="text")
 elif similarity_df is not None:
     st.divider()
     display_similarity_section(similarity_df, active_smiles_query, show_compound_heading=True)
