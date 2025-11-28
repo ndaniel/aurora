@@ -41,10 +41,11 @@ DATA_DIR = "data"
 
 # LIST_COMPOUNDS_PATH = os.path.join(DATA_DIR, "coconut_compounds.txt")
 # LIST_PLANTS_FI_NO_PATH = os.path.join(DATA_DIR, "organisms_laji_gbif_FI_NO_plants.tsv")
-COCONUT_DB_PATH = os.path.join(DATA_DIR, "coconut_csv-09-2025_FI_NO_plants.csv")
+#COCONUT_DB_PATH = os.path.join(DATA_DIR, "coconut_csv-09-2025_FI_NO_plants.csv")
+COCONUT_DB_PATH = os.path.join(DATA_DIR, "coconut_csv-09-2025_FI_NO_selected.parquet")
 LAJI_DB_PATH = os.path.join(DATA_DIR, "laji2_fi.txt")
-GBIF_DB_PATH = os.path.join(DATA_DIR, "gbif_plants_FI_NO_merged.tsv")
-LIST_PLANTS_GENERA_PATH = os.path.join(DATA_DIR, "plants_genera.txt")
+GBIF_DB_PATH = os.path.join(DATA_DIR, "gbif_selected_FI_NO_merged.tsv")
+LIST_PLANTS_GENERA_PATH = os.path.join(DATA_DIR, "selected_genera.txt")
 
 st.set_page_config(page_title="AURORA Pilot", layout="wide")
 
@@ -148,7 +149,7 @@ def _make_morgan_bit_gen(radius: int = 2, nbits: int = 2048):
 
 SIM_BIT_GEN = _make_morgan_bit_gen(SIM_FP_RADIUS, SIM_FP_BITS)
 
-st.title("AURORA Pilot (compounds in Nordic plants)")
+st.title("AURORA Pilot (compounds in selected Nordic species)")
 st.markdown("_Daniel Nicorici, Juha Klefström — University of Helsinki_")
 
 ########################################################################################
@@ -264,7 +265,8 @@ def load_data():
     laji_gbif = laji_gbif.drop(columns=["identifier_laji", "genusKey_gbif", "speciesKey_gbif", "url_laji", "url_gbif"])
 
     log.info("Processing Coconut database information...")
-    coconut = pd.read_csv(COCONUT_DB_PATH, sep="\t", low_memory=False)
+    #coconut = pd.read_csv(COCONUT_DB_PATH, sep="\t", low_memory=False)
+    coconut = pd.read_parquet(COCONUT_DB_PATH)
     coconut = coconut.dropna(subset=["name", "identifier"])
     coconut = coconut.drop(columns=["identifier"])
     coconut["name"] = coconut["name"].str.lower().str.strip()
@@ -275,6 +277,7 @@ def load_data():
     compounds = sorted(set(coconut["name"].unique().tolist()))
     smiles = sorted(set(coconut["canonical_smiles"].unique().tolist()))
 
+    log.info("Processing databases finished.")
     return (plants_genera, coconut, laji_gbif, compounds, smiles)
 
 ########################################################################################
@@ -327,6 +330,7 @@ def analyse(compound: str = "arctigenin", smile: str = "",genus: bool = False) -
 
     log.info("Found -> Compound: %s", compound)
     log.info("Found -> SMILES: %s", smiles_value)
+    log.info("Found -> ORG: %s", "|".join(org))
 
     org = sorted(set([e.lower().strip() for e in org if e]))
     # keep only plants
@@ -874,3 +878,8 @@ st.caption(
     "[Laji.fi](https://laji.fi/) (Finnish Biodiversity Information Facility) and "
     "[GBIF](https://www.gbif.org/) (Global Biodiversity Information Facility)."
 )
+
+
+st.caption('<span style="font-size: x-small;">App version: 3.1;  © 2025 Daniel Nicorici, Juha Klefström — University of Helsinki</span>', unsafe_allow_html=True)
+
+
