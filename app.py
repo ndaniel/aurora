@@ -12,6 +12,7 @@ import io
 from html import escape
 from typing import Tuple
 from urllib.parse import quote_plus, unquote_plus
+from collections.abc import Mapping
 
 import pandas as pd
 import streamlit as st
@@ -68,8 +69,20 @@ for k, v in {
         st.session_state[k] = v
 
 QUERY_PARAM_KEY = "select_compound"
-query_params = st.query_params if hasattr(st, "query_params") else {}
-selected_values = query_params.get(QUERY_PARAM_KEY, []) if isinstance(query_params, dict) else []
+query_params: dict[str, list[str] | str] = {}
+raw_query_params = getattr(st, "query_params", None)
+if raw_query_params is not None:
+    if isinstance(raw_query_params, Mapping):
+        query_params = dict(raw_query_params)
+    else:
+        to_dict = getattr(raw_query_params, "to_dict", None)
+        if callable(to_dict):
+            query_params = to_dict()
+else:
+    experimental_get = getattr(st, "experimental_get_query_params", None)
+    if callable(experimental_get):
+        query_params = experimental_get()
+selected_values = query_params.get(QUERY_PARAM_KEY, [])
 if not isinstance(selected_values, list):
     selected_values = [selected_values]
 if selected_values:
@@ -881,5 +894,3 @@ st.caption(
 
 
 st.caption('<span style="font-size: x-small;">App version: 3.1;  © 2025 Daniel Nicorici, Juha Klefström — University of Helsinki</span>', unsafe_allow_html=True)
-
-
