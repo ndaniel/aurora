@@ -48,6 +48,9 @@ LAJI_DB_PATH = os.path.join(DATA_DIR, "laji2_fi.txt")
 GBIF_DB_PATH = os.path.join(DATA_DIR, "gbif_selected_FI_NO_merged.tsv")
 LIST_PLANTS_GENERA_PATH = os.path.join(DATA_DIR, "selected_genera.txt")
 
+# Hard-coded app password; change the value to update access
+APP_PASSWORD = "metformin"
+
 st.set_page_config(page_title="AURORA Pilot", layout="wide")
 
 # ---- Session state init (so tables persist after any rerun, e.g., download clicks) ----
@@ -64,9 +67,38 @@ for k, v in {
     "similarity_table": None,
     "active_smiles_query": None,
     "similarity_error": None,
+    "auth_ok": False,
+    "auth_error": False,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+def require_password():
+    """Optional password gate that does not disturb the rest of the UI."""
+    if not APP_PASSWORD:
+        return
+    if st.session_state.get("auth_ok"):
+        return
+
+    if st.session_state.get("auth_error"):
+        st.error("Incorrect password, please try again.")
+
+    with st.form("auth_form"):
+        st.subheader("Enter password to continue")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Unlock")
+
+    if submitted:
+        if password == APP_PASSWORD:
+            st.session_state["auth_ok"] = True
+            st.session_state["auth_error"] = False
+            st.rerun()
+        else:
+            st.session_state["auth_error"] = True
+
+    if not st.session_state.get("auth_ok"):
+        st.stop()
 
 QUERY_PARAM_KEY = "select_compound"
 query_params: dict[str, list[str] | str] = {}
@@ -100,6 +132,8 @@ if st.session_state.get("pending_association"):
 if st.session_state.get("pending_compound"):
     st.session_state["compound_input"] = st.session_state.pop("pending_compound")
     st.session_state["auto_run"] = True
+
+require_password()
 
 # Cap the overall content width and shrink the first (#) column
 st.markdown(
@@ -714,6 +748,7 @@ with c1:
     # Text input allows free-form entry for names or SMILES strings
     compound = st.text_input(
         "Compound",
+        value=st.session_state.get("compound_input", DEFAULT_COMPOUND),
         key="compound_input",
         help="Enter a compound name.",
     )
@@ -893,4 +928,4 @@ st.caption(
 )
 
 
-st.caption('<span style="font-size: x-small;">App version: 3.1;  © 2025 Daniel Nicorici, Juha Klefström — University of Helsinki</span>', unsafe_allow_html=True)
+st.caption('<span style="font-size: x-small;">App version: 3.2;  © 2025 Daniel Nicorici, Juha Klefström — University of Helsinki</span>', unsafe_allow_html=True)
